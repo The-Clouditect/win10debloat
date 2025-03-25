@@ -1,146 +1,4 @@
-function Set-ChromeDefault {
-    Write-Status "Setting Chrome as default browser..."
-    
-    try {
-        # Prepare Chrome registry entries
-        $progId = "ChromeHTML"
-        
-        # Set default protocol handlers for HTTP/HTTPS
-        $protoPath = "HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations"
-        $protocols = @("http", "https")
-        
-        foreach ($protocol in $protocols) {
-            $protocolPath = "$protoPath\$protocol\UserChoice"
-            
-            # We can try but Windows often reverts these
-            if (!(Test-Path $protocolPath)) {
-                if (!$DryRun) {
-                    New-Item -Path $protocolPath -Force | Out-Null
-                } else {
-                    Write-WouldPerform "Create registry path $protocolPath"
-                }
-            }
-            
-            try {
-                if (!$DryRun) {
-                    Set-ItemProperty -Path $protocolPath -Name "ProgId" -Value $progId -Type String -Force
-                    Write-Success "Set Chrome as default for $protocol (may require user confirmation)"
-                } else {
-                    Write-WouldPerform "Set Chrome as default for $protocol protocol"
-                }
-            } catch {
-                # Windows 10 actively prevents programmatic changes here
-                Write-Warning "Could not set Chrome as default for $protocol protocol"
-            }
-        }
-        
-        # Set default file associations
-        $fileTypes = @(".htm", ".html")
-        foreach ($type in $fileTypes) {
-            try {
-                if (!$DryRun) {
-                    cmd /c "assoc $type=ChromeHTML" | Out-Null
-                    Write-Success "Set Chrome as default for $type files"
-                } else {
-                    Write-WouldPerform "Set Chrome as default for $type files"
-                }
-            } catch {
-                Write-Warning "Could not set Chrome as default for $type files"
-            }
-        }
-        
-        # Get correct Chrome path
-        $chromePath = ""
-        if (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe") {
-            $chromePath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-        } else {
-            $chromePath = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-        }
-        
-        # Launch Chrome to help user set it as default
-        if (!$DryRun) {
-            Write-Info "Opening Chrome to help you set it as your default browser"
-            Start-Process $chromePath -ArgumentList "--new-window chrome://settings/defaultBrowser"
-        } else {
-            Write-WouldPerform "Open Chrome default browser settings page"
-        }
-        
-        # Clear instructions for user
-        Write-Warning "Windows 10 restricts programmatic browser default changes"
-        Write-Info "To set Chrome as default: Settings > Apps > Default Apps > Web Browser > Chrome"
-        Write-Info "Or follow the prompt in Chrome to make it your default browser"
-    } catch {
-        Write-Warning "Setting Chrome as default browser failed: $_"
-    }
-}
-
-function Set-FirefoxDefault {
-    Write-Status "Setting Firefox as default browser..."
-    
-    try {
-        # Prepare Firefox registry entries
-        $progId = "FirefoxHTML"
-        
-        # Set default protocol handlers for HTTP/HTTPS
-        $protoPath = "HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations"
-        $protocols = @("http", "https")
-        
-        foreach ($protocol in $protocols) {
-            $protocolPath = "$protoPath\$protocol\UserChoice"
-            
-            # We can try but Windows often reverts these
-            if (!(Test-Path $protocolPath)) {
-                if (!$DryRun) {
-                    New-Item -Path $protocolPath -Force | Out-Null
-                } else {
-                    Write-WouldPerform "Create registry path $protocolPath"
-                }
-            }
-            
-            try {
-                if (!$DryRun) {
-                    Set-ItemProperty -Path $protocolPath -Name "ProgId" -Value $progId -Type String -Force
-                    Write-Success "Set Firefox as default for $protocol (may require user confirmation)"
-                } else {
-                    Write-WouldPerform "Set Firefox as default for $protocol protocol"
-                }
-            } catch {
-                # Windows 10 actively prevents programmatic changes here
-                Write-Warning "Could not set Firefox as default for $protocol protocol"
-            }
-        }
-        
-        # Set default file associations
-        $fileTypes = @(".htm", ".html")
-        foreach ($type in $fileTypes) {
-            try {
-                if (!$DryRun) {
-                    cmd /c "assoc $type=FirefoxHTML" | Out-Null
-                    Write-Success "Set Firefox as default for $type files"
-                } else {
-                    Write-WouldPerform "Set Firefox as default for $type files"
-                }
-            } catch {
-                Write-Warning "Could not set Firefox as default for $type files"
-            }
-        }
-        
-        # Launch Firefox to help user set it as default
-        if (!$DryRun) {
-            Write-Info "Opening Firefox to help you set it as your default browser"
-            Start-Process "C:\Program Files\Mozilla Firefox\firefox.exe" -ArgumentList "-new-tab about:preferences#general"
-        } else {
-            Write-WouldPerform "Open Firefox preferences page"
-        }
-        
-        # Clear instructions for user
-        Write-Warning "Windows 10 restricts programmatic browser default changes"
-        Write-Info "To set Firefox as default: Settings > Apps > Default Apps > Web Browser > Firefox"
-        Write-Info "Or follow the prompt in Firefox to make it your default browser"
-    } catch {
-        Write-Warning "Setting Firefox as default browser failed: $_"
-    }
-}#Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Windows 10 Debloat Script - Disables unwanted features and services
@@ -159,11 +17,20 @@ function Set-FirefoxDefault {
     Contain Microsoft Edge browser
 .PARAMETER Firefox
     Install Firefox and attempt to set as default
+.PARAMETER Chrome
+    Install Chrome and attempt to set as default
 .PARAMETER All
     Run all operations (default if no parameters specified)
+.PARAMETER DryRun
+    Simulate operations without making changes (preview mode)
+.PARAMETER Apply
+    Apply changes (overrides DryRun)
 .EXAMPLE
     .\windows-debloat.ps1 -Telemetry -Firefox
     # Only runs telemetry disabling and Firefox installation
+.EXAMPLE
+    .\windows-debloat.ps1 -DryRun
+    # Simulates all operations without making changes
 .EXAMPLE
     .\windows-debloat.ps1
     # Runs all operations (equivalent to -All)
@@ -178,19 +45,23 @@ param (
     [switch]$Edge,
     [switch]$Firefox,
     [switch]$Chrome,
-    [switch]$All
+    [switch]$All,
+    [switch]$DryRun,
+    [switch]$Apply
 )
 
-# Message stacks for different severity levels
+# Configuration and global variables
+$ALWAYS_APPLY = $false # set to true to use at your own risk
+$global:DryRun = $DryRun -and !$Apply -and !$ALWAYS_APPLY
 $global:messageTypes = @{
     "Critical" = @() # For failures requiring action
     "Warning"  = @() # For limitations requiring manual steps
     "Info"     = @() # For context/follow-up instructions
 }
-
 $global:actionsPerformed = @()
 $global:wouldPerform = @() # Actions that would be performed in dry-run mode
 
+#region Helper Functions
 # Status functions
 function Write-Status($message) {
     Write-Host "$message" -ForegroundColor Cyan
@@ -268,7 +139,7 @@ function Process-Messages {
 }
 
 function Process-Summary {
-    if ($DryRun) {
+    if ($global:DryRun) {
         if ($global:wouldPerform.Count -eq 0) {
             Write-Host "`nNo changes would be made - system already configured." -ForegroundColor Yellow
         } else {
@@ -305,17 +176,159 @@ function Process-Summary {
     }
 }
 
-#region Check Admin Rights
 function Verify-AdminRights {
-    if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (-NOT $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Write-Critical "This script must be run as Administrator!"
         return $false
     }
     return $true
 }
+
+function Get-DefaultBrowser {
+    # Check default browser from registry
+    $defaultBrowser = ""
+    try {
+        $httpHandler = Get-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice" -Name "ProgId" -ErrorAction SilentlyContinue
+        if ($httpHandler) {
+            if ($httpHandler.ProgId -like "*Chrome*") {
+                $defaultBrowser = "Chrome"
+            } elseif ($httpHandler.ProgId -like "*Firefox*") {
+                $defaultBrowser = "Firefox"
+            }
+        }
+    } catch {
+        # Registry key not readable, default not determinable
+        $defaultBrowser = ""
+    }
+    
+    return $defaultBrowser
+}
 #endregion
 
-#region Browser Installation
+#region Browser Installation Functions
+function Install-Chrome {
+    Write-Status "Checking Chrome installation..."
+    
+    if (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe" -or Test-Path "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") {
+        Write-Skip "Chrome already installed"
+        return @{
+            Success = $true
+            Browser = "Chrome"
+        }
+    }
+    
+    try {
+        $downloadUrl = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
+        $installerPath = Join-Path $env:TEMP "chrome_installer.exe"
+        
+        Write-Status "Downloading Chrome installer..."
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath -UseBasicParsing
+        
+        Write-Status "Installing Chrome silently..."
+        if (!$global:DryRun) {
+            Start-Process -FilePath $installerPath -Args "/silent /install" -Wait
+            
+            # Verify installation
+            Start-Sleep -Seconds 2 # Give installer time to finish
+            if (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe" -or Test-Path "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") {
+                Write-Success "Chrome successfully installed"
+                return @{
+                    Success = $true
+                    Browser = "Chrome"
+                }
+            } else {
+                Write-Critical "Chrome installation failed - executable not found"
+                return @{
+                    Success = $false
+                    Browser = "Chrome"
+                    Error = "Chrome executable not found after installation"
+                }
+            }
+        } else {
+            Write-WouldPerform "Install Chrome browser"
+            return @{
+                Success = $true
+                Browser = "Chrome"
+            }
+        }
+    } catch {
+        Write-Critical "Chrome installation failed: $_"
+        return @{
+            Success = $false
+            Browser = "Chrome"
+            Error = "Exception: $_"
+        }
+    } finally {
+        # Clean up
+        if (Test-Path $installerPath) {
+            Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Install-Firefox {
+    Write-Status "Checking Firefox installation..."
+    
+    if (Test-Path "C:\Program Files\Mozilla Firefox\firefox.exe") {
+        Write-Skip "Firefox already installed"
+        return @{
+            Success = $true
+            Browser = "Firefox"
+        }
+    }
+    
+    try {
+        $downloadUrl = "https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US"
+        $installerPath = Join-Path $env:TEMP "firefox_installer.exe"
+        
+        Write-Status "Downloading Firefox installer..."
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath -UseBasicParsing
+        
+        Write-Status "Installing Firefox silently..."
+        if (!$global:DryRun) {
+            Start-Process -FilePath $installerPath -Args "/S" -Wait
+            
+            # Verify installation
+            Start-Sleep -Seconds 2 # Give installer time to finish
+            if (Test-Path "C:\Program Files\Mozilla Firefox\firefox.exe") {
+                Write-Success "Firefox successfully installed"
+                return @{
+                    Success = $true
+                    Browser = "Firefox"
+                }
+            } else {
+                Write-Critical "Firefox installation failed - executable not found"
+                return @{
+                    Success = $false
+                    Browser = "Firefox"
+                    Error = "Firefox executable not found after installation"
+                }
+            }
+        } else {
+            Write-WouldPerform "Install Firefox browser"
+            return @{
+                Success = $true
+                Browser = "Firefox"
+            }
+        }
+    } catch {
+        Write-Critical "Firefox installation failed: $_"
+        return @{
+            Success = $false
+            Browser = "Firefox"
+            Error = "Exception: $_"
+        }
+    } finally {
+        # Clean up
+        if (Test-Path $installerPath) {
+            Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Install-Browser {
     param (
         [Parameter(Mandatory=$false)]
@@ -323,7 +336,7 @@ function Install-Browser {
     )
     
     # Check for existing browser installations
-    $chromeExists = Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe" -Or Test-Path "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
+    $chromeExists = Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe" -or Test-Path "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
     $firefoxExists = Test-Path "C:\Program Files\Mozilla Firefox\firefox.exe"
     
     # Check current default browser
@@ -378,7 +391,7 @@ function Install-Browser {
         }
     }
     
-    # No browser found, install Firefox (as requested)
+    # No browser found, install Firefox (as default)
     $firefoxResult = Install-Firefox
     if ($firefoxResult.Success) {
         $firefoxResult.Action = "Installed"
@@ -398,145 +411,212 @@ function Install-Browser {
         Success = $false
         Browser = ""
         Action = "Failed"
+        Error = "Both Firefox and Chrome installation attempts failed"
     }
 }
+#endregion
 
-function Get-DefaultBrowser {
-    # Check default browser from registry
-    $defaultBrowser = ""
-    try {
-        $httpHandler = Get-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice" -Name "ProgId" -ErrorAction SilentlyContinue
-        if ($httpHandler) {
-            if ($httpHandler.ProgId -like "*Chrome*") {
-                $defaultBrowser = "Chrome"
-            } elseif ($httpHandler.ProgId -like "*Firefox*") {
-                $defaultBrowser = "Firefox"
-            }
-        }
-    } catch {
-        # Registry key not readable, default not determinable
-        $defaultBrowser = ""
-    }
-    
-    return $defaultBrowser
-}
-
-function Install-Chrome {
-    Write-Status "Checking Chrome installation..."
-    
-    if (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe" -Or Test-Path "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") {
-        Write-Skip "Chrome already installed"
-        return @{
-            Success = $true
-            Browser = "Chrome"
-        }
-    }
+#region Browser Default Functions
+function Set-ChromeDefault {
+    Write-Status "Setting Chrome as default browser..."
     
     try {
-        $downloadUrl = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
-        $installerPath = "$env:TEMP\chrome_installer.exe"
+        # Prepare Chrome registry entries
+        $progId = "ChromeHTML"
         
-        Write-Status "Downloading Chrome installer..."
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath
+        # Set default protocol handlers for HTTP/HTTPS
+        $protoPath = "HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations"
+        $protocols = @("http", "https")
         
-        Write-Status "Installing Chrome silently..."
-        if (!$DryRun) {
-            Start-Process -FilePath $installerPath -Args "/silent /install" -Wait
+        foreach ($protocol in $protocols) {
+            $protocolPath = Join-Path $protoPath "$protocol\UserChoice"
             
-            # Verify installation
-            if (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe" -Or Test-Path "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") {
-                Write-Success "Chrome successfully installed"
-                return @{
-                    Success = $true
-                    Browser = "Chrome"
-                }
-            } else {
-                Write-Critical "Chrome installation failed - executable not found"
-                return @{
-                    Success = $false
-                    Browser = "Chrome"
+            # We can try but Windows often reverts these
+            if (!(Test-Path $protocolPath)) {
+                if (!$global:DryRun) {
+                    New-Item -Path $protocolPath -Force | Out-Null
+                } else {
+                    Write-WouldPerform "Create registry path $protocolPath"
                 }
             }
+            
+            try {
+                if (!$global:DryRun) {
+                    Set-ItemProperty -Path $protocolPath -Name "ProgId" -Value $progId -Type String -Force
+                    Write-Success "Set Chrome as default for $protocol (may require user confirmation)"
+                } else {
+                    Write-WouldPerform "Set Chrome as default for $protocol protocol"
+                }
+            } catch {
+                # Windows 10 actively prevents programmatic changes here
+                Write-Warning "Could not set Chrome as default for $protocol protocol"
+            }
+        }
+        
+        # Set default file associations
+        $fileTypes = @(".htm", ".html")
+        foreach ($type in $fileTypes) {
+            try {
+                if (!$global:DryRun) {
+                    cmd /c "assoc $type=ChromeHTML" | Out-Null
+                    Write-Success "Set Chrome as default for $type files"
+                } else {
+                    Write-WouldPerform "Set Chrome as default for $type files"
+                }
+            } catch {
+                Write-Warning "Could not set Chrome as default for $type files"
+            }
+        }
+        
+        # Get correct Chrome path
+        $chromePath = ""
+        if (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe") {
+            $chromePath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
         } else {
-            Write-WouldPerform "Install Chrome browser"
-            return @{
-                Success = $true
-                Browser = "Chrome"
-            }
+            $chromePath = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
         }
+        
+        # Launch Chrome to help user set it as default
+        if (!$global:DryRun) {
+            Write-Info "Opening Chrome to help you set it as your default browser"
+            Start-Process $chromePath -ArgumentList "--new-window chrome://settings/defaultBrowser"
+        } else {
+            Write-WouldPerform "Open Chrome default browser settings page"
+        }
+        
+        # Clear instructions for user
+        Write-Warning "Windows 10 restricts programmatic browser default changes"
+        Write-Info "To set Chrome as default: Settings > Apps > Default Apps > Web Browser > Chrome"
+        Write-Info "Or follow the prompt in Chrome to make it your default browser"
     } catch {
-        Write-Critical "Chrome installation failed: $_"
-        return @{
-            Success = $false
-            Browser = "Chrome"
-        }
-    } finally {
-        # Clean up
-        if (Test-Path $installerPath) {
-            Remove-Item $installerPath -Force
-        }
+        Write-Warning "Setting Chrome as default browser failed: $_"
     }
 }
 
-function Install-Firefox {
-    Write-Status "Checking Firefox installation..."
-    
-    if (Test-Path "C:\Program Files\Mozilla Firefox\firefox.exe") {
-        Write-Skip "Firefox already installed"
-        return @{
-            Success = $true
-            Browser = "Firefox"
-        }
-    }
+function Set-FirefoxDefault {
+    Write-Status "Setting Firefox as default browser..."
     
     try {
-        $downloadUrl = "https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US"
-        $installerPath = "$env:TEMP\firefox_installer.exe"
+        # Prepare Firefox registry entries
+        $progId = "FirefoxHTML"
         
-        Write-Status "Downloading Firefox installer..."
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath
+        # Set default protocol handlers for HTTP/HTTPS
+        $protoPath = "HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations"
+        $protocols = @("http", "https")
         
-        Write-Status "Installing Firefox silently..."
-        if (!$DryRun) {
-            Start-Process -FilePath $installerPath -Args "/S" -Wait
+        foreach ($protocol in $protocols) {
+            $protocolPath = Join-Path $protoPath "$protocol\UserChoice"
             
-            # Verify installation
-            if (Test-Path "C:\Program Files\Mozilla Firefox\firefox.exe") {
-                Write-Success "Firefox successfully installed"
-                return @{
-                    Success = $true
-                    Browser = "Firefox"
-                }
-            } else {
-                Write-Critical "Firefox installation failed - executable not found"
-                return @{
-                    Success = $false
-                    Browser = "Firefox"
+            # We can try but Windows often reverts these
+            if (!(Test-Path $protocolPath)) {
+                if (!$global:DryRun) {
+                    New-Item -Path $protocolPath -Force | Out-Null
+                } else {
+                    Write-WouldPerform "Create registry path $protocolPath"
                 }
             }
+            
+            try {
+                if (!$global:DryRun) {
+                    Set-ItemProperty -Path $protocolPath -Name "ProgId" -Value $progId -Type String -Force
+                    Write-Success "Set Firefox as default for $protocol (may require user confirmation)"
+                } else {
+                    Write-WouldPerform "Set Firefox as default for $protocol protocol"
+                }
+            } catch {
+                # Windows 10 actively prevents programmatic changes here
+                Write-Warning "Could not set Firefox as default for $protocol protocol"
+            }
+        }
+        
+        # Set default file associations
+        $fileTypes = @(".htm", ".html")
+        foreach ($type in $fileTypes) {
+            try {
+                if (!$global:DryRun) {
+                    cmd /c "assoc $type=FirefoxHTML" | Out-Null
+                    Write-Success "Set Firefox as default for $type files"
+                } else {
+                    Write-WouldPerform "Set Firefox as default for $type files"
+                }
+            } catch {
+                Write-Warning "Could not set Firefox as default for $type files"
+            }
+        }
+        
+        # Launch Firefox to help user set it as default
+        if (!$global:DryRun) {
+            Write-Info "Opening Firefox to help you set it as your default browser"
+            Start-Process "C:\Program Files\Mozilla Firefox\firefox.exe" -ArgumentList "-new-tab about:preferences#general"
         } else {
-            Write-WouldPerform "Install Firefox browser"
-            return @{
-                Success = $true
-                Browser = "Firefox"
+            Write-WouldPerform "Open Firefox preferences page"
+        }
+        
+        # Clear instructions for user
+        Write-Warning "Windows 10 restricts programmatic browser default changes"
+        Write-Info "To set Firefox as default: Settings > Apps > Default Apps > Web Browser > Firefox"
+        Write-Info "Or follow the prompt in Firefox to make it your default browser"
+    } catch {
+        Write-Warning "Setting Firefox as default browser failed: $_"
+    }
+}
+
+function Set-BrowserDefault {
+    param (
+        [Parameter(Mandatory=$false)]
+        [string]$Browser = ""
+    )
+    
+    # Check current default browser
+    $currentDefault = Get-DefaultBrowser
+    
+    # Determine which browser to set as default
+    if ($Browser -eq "Chrome") {
+        if (!(Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe" -or Test-Path "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe")) {
+            Write-Warning "Chrome not installed - cannot set as default browser"
+            return
+        }
+        if ($currentDefault -eq "Chrome") {
+            Write-Skip "Chrome is already set as default browser"
+        } else {
+            Set-ChromeDefault
+        }
+    } 
+    elseif ($Browser -eq "Firefox") {
+        if (!(Test-Path "C:\Program Files\Mozilla Firefox\firefox.exe")) {
+            Write-Warning "Firefox not installed - cannot set as default browser"
+            return
+        }
+        if ($currentDefault -eq "Firefox") {
+            Write-Skip "Firefox is already set as default browser"
+        } else {
+            Set-FirefoxDefault
+        }
+    }
+    else {
+        # Auto-detect installed browser
+        if (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe" -or Test-Path "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") {
+            if ($currentDefault -eq "Chrome") {
+                Write-Skip "Chrome is already set as default browser"
+            } else {
+                Set-ChromeDefault
             }
         }
-    } catch {
-        Write-Critical "Firefox installation failed: $_"
-        return @{
-            Success = $false
-            Browser = "Firefox"
+        elseif (Test-Path "C:\Program Files\Mozilla Firefox\firefox.exe") {
+            if ($currentDefault -eq "Firefox") {
+                Write-Skip "Firefox is already set as default browser"
+            } else {
+                Set-FirefoxDefault
+            }
         }
-    } finally {
-        # Clean up
-        if (Test-Path $installerPath) {
-            Remove-Item $installerPath -Force
+        else {
+            Write-Warning "No supported browser installed - cannot set default browser"
         }
     }
 }
 #endregion
 
-#region Disable Telemetry
+#region Feature Manipulation Functions
 function Disable-Telemetry {
     Write-Status "Disabling Windows telemetry/data collection..."
 
@@ -544,7 +624,7 @@ function Disable-Telemetry {
         # DiagTrack service
         $diagTrack = Get-Service -Name DiagTrack -ErrorAction SilentlyContinue
         if ($diagTrack -and $diagTrack.Status -eq "Running") {
-            if (!$DryRun) {
+            if (!$global:DryRun) {
                 Stop-Service -Name DiagTrack -Force
                 Set-Service -Name DiagTrack -StartupType Disabled
                 Write-Success "Disabled DiagTrack (Connected User Experiences and Telemetry) service"
@@ -558,7 +638,7 @@ function Disable-Telemetry {
         # dmwappushsvc service
         $dmwappushsvc = Get-Service -Name dmwappushsvc -ErrorAction SilentlyContinue
         if ($dmwappushsvc -and $dmwappushsvc.Status -eq "Running") {
-            if (!$DryRun) {
+            if (!$global:DryRun) {
                 Stop-Service -Name dmwappushsvc -Force
                 Set-Service -Name dmwappushsvc -StartupType Disabled
                 Write-Success "Disabled dmwappushsvc (WAP Push Message Routing) service"
@@ -572,7 +652,7 @@ function Disable-Telemetry {
         # Telemetry via Registry
         $telemetryPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection"
         if (!(Test-Path $telemetryPath)) {
-            if (!$DryRun) {
+            if (!$global:DryRun) {
                 New-Item -Path $telemetryPath -Force | Out-Null
             } else {
                 Write-WouldPerform "Create registry path $telemetryPath"
@@ -581,8 +661,9 @@ function Disable-Telemetry {
         
         # AllowTelemetry (0 = Off)
         $allowTelemetry = Get-ItemProperty -Path $telemetryPath -Name "AllowTelemetry" -ErrorAction SilentlyContinue
-        if (!$allowTelemetry -or $allowTelemetry.AllowTelemetry -ne 0) {
-            if (!$DryRun) {
+        $currentValue = if ($allowTelemetry) { $allowTelemetry.AllowTelemetry } else { -1 }
+        if ($currentValue -ne 0) {
+            if (!$global:DryRun) {
                 Set-ItemProperty -Path $telemetryPath -Name "AllowTelemetry" -Value 0 -Type DWord -Force
                 Write-Success "Set telemetry AllowTelemetry to 0 (Off)"
             } else {
@@ -595,7 +676,7 @@ function Disable-Telemetry {
         # Disable Customer Experience Improvement Program
         $ceipPath = "HKLM:\SOFTWARE\Policies\Microsoft\SQMClient\Windows"
         if (!(Test-Path $ceipPath)) {
-            if (!$DryRun) {
+            if (!$global:DryRun) {
                 New-Item -Path $ceipPath -Force | Out-Null
             } else {
                 Write-WouldPerform "Create registry path $ceipPath"
@@ -603,8 +684,9 @@ function Disable-Telemetry {
         }
         
         $ceipEnabled = Get-ItemProperty -Path $ceipPath -Name "CEIPEnable" -ErrorAction SilentlyContinue
-        if (!$ceipEnabled -or $ceipEnabled.CEIPEnable -ne 0) {
-            if (!$DryRun) {
+        $currentCeipValue = if ($ceipEnabled) { $ceipEnabled.CEIPEnable } else { -1 }
+        if ($currentCeipValue -ne 0) {
+            if (!$global:DryRun) {
                 Set-ItemProperty -Path $ceipPath -Name "CEIPEnable" -Value 0 -Type DWord -Force
                 Write-Success "Disabled Customer Experience Improvement Program"
             } else {
@@ -614,9 +696,54 @@ function Disable-Telemetry {
             Write-Skip "Customer Experience Improvement Program already disabled"
         }
         
-        # Block telemetry domains in hosts file
-        $hostsPath = "$env:windir\System32\drivers\etc\hosts"
-        $hosts = Get-Content -Path $hostsPath -ErrorAction SilentlyContinue
+        $hostsPath = Join-Path $env:windir "System32\drivers\etc\hosts"
+
+        # Check if hosts file exists and is writable
+        if (!(Test-Path $hostsPath)) {
+            try {
+                if (!$global:DryRun) {
+                    New-Item -Path $hostsPath -ItemType File -Force -ErrorAction Stop | Out-Null
+                    Write-Success "Created hosts file at $hostsPath"
+                } else {
+                    Write-WouldPerform "Create hosts file at $hostsPath"
+                }
+            } catch {
+                Write-Warning "Cannot create hosts file: $_"
+                Write-Warning "Telemetry domain blocking skipped"
+                # Skip the rest of this section
+                return
+            }
+        }
+
+        # Test write permissions by attempting to get an exclusive lock
+        $hasWriteAccess = $false
+        try {
+            [System.IO.File]::Open($hostsPath, 'Open', 'Write', 'None').Close()
+            $hasWriteAccess = $true
+        } catch {
+            Write-Warning "No write access to hosts file"
+            if (!$global:DryRun) {
+                Write-Info "Consider running the script with full administrator privileges"
+                # Skip the rest of this section
+                return
+            }
+        }
+
+        # Read the hosts file content
+        $hostsContent = Get-Content -Path $hostsPath -ErrorAction SilentlyContinue
+
+        # Create lookup table of existing domains
+        $existingEntries = @{}
+        foreach ($line in $hostsContent) {
+            if ($line -match "^\s*\d+\.\d+\.\d+\.\d+\s+([^\s#]+)") {
+                $existingEntries[$matches[1]] = $line
+            }
+        }
+
+        # Domains to add with diff view
+        $domainsToAdd = @()
+        Write-Status "Analyzing hosts file changes:"
+
         $telemetryDomains = @(
             "vortex.data.microsoft.com",
             "vortex-win.data.microsoft.com",
@@ -664,23 +791,38 @@ function Disable-Telemetry {
             "feedback.search.microsoft.com"
         )
         
-        $domainsAdded = $false
+        # Check each domain and track what we need to add
         foreach ($domain in $telemetryDomains) {
-            $pattern = "^\s*127\.0\.0\.1\s+$([regex]::Escape($domain))\s*$"
-            if ($hosts -notmatch $pattern) {
-                if (!$DryRun) {
-                    Add-Content -Path $hostsPath -Value "127.0.0.1 $domain" -Force
-                    $domainsAdded = $true
-                } else {
-                    Write-WouldPerform "Add telemetry domain $domain to hosts file"
+            if (!$existingEntries.ContainsKey($domain)) {
+                $domainsToAdd += "127.0.0.1 $domain"
+                
+                # Show what would be added in dry run
+                if ($global:DryRun) {
+                    Write-Host "  + 127.0.0.1 $domain" -ForegroundColor Green
+                }
+            } else {
+                # Show existing entry
+                if ($global:DryRun) {
+                    Write-Host "  = $($existingEntries[$domain]) (already exists)" -ForegroundColor DarkGray
                 }
             }
         }
-        
-        if ($domainsAdded -and !$DryRun) {
-            Write-Success "Added telemetry domains to hosts file"
-        } elseif (!$domainsAdded) {
-            Write-Skip "Telemetry domains already in hosts file"
+
+        # Summary of changes
+        if ($domainsToAdd.Count -gt 0) {
+            if (!$global:DryRun -and $hasWriteAccess) {
+                try {
+                    $domainsToAdd | Out-File -FilePath $hostsPath -Append -Encoding ascii -ErrorAction Stop
+                    Write-Success "Added $($domainsToAdd.Count) telemetry domains to hosts file"
+                } catch {
+                    Write-Warning "Cannot modify hosts file: $_"
+                    Write-Warning "Make sure you're running as administrator with full privileges"
+                }
+            } elseif ($global:DryRun) {
+                Write-WouldPerform "Add $($domainsToAdd.Count) telemetry domains to hosts file"
+            }
+        } else {
+            Write-Skip "Telemetry domains already blocked in hosts file"
         }
         
         # Disable scheduled tasks
@@ -697,19 +839,25 @@ function Disable-Telemetry {
         
         $tasksDisabled = $false
         foreach ($task in $telemetryTasks) {
-            $taskObj = Get-ScheduledTask -TaskPath $task -ErrorAction SilentlyContinue
-            if ($taskObj -and $taskObj.State -ne "Disabled") {
-                if (!$DryRun) {
-                    Disable-ScheduledTask -TaskPath $task -ErrorAction SilentlyContinue | Out-Null
-                    $tasksDisabled = $true
-                } else {
-                    Write-WouldPerform "Disable scheduled task $task"
-                    $tasksDisabled = $true
+            try {
+                $taskPath = Split-Path $task -Parent
+                $taskName = Split-Path $task -Leaf
+                $taskObj = Get-ScheduledTask -TaskPath "$taskPath\" -TaskName $taskName -ErrorAction SilentlyContinue
+                if ($taskObj -and $taskObj.State -ne "Disabled") {
+                    if (!$global:DryRun) {
+                        Disable-ScheduledTask -TaskPath "$taskPath\" -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null
+                        $tasksDisabled = $true
+                    } else {
+                        Write-WouldPerform "Disable scheduled task $task"
+                        $tasksDisabled = $true
+                    }
                 }
+            } catch {
+                Write-Warning "Could not disable task $task`: $_"
             }
         }
         
-        if ($tasksDisabled -and !$DryRun) {
+        if ($tasksDisabled -and !$global:DryRun) {
             Write-Success "Disabled telemetry scheduled tasks"
         } elseif (!$tasksDisabled) {
             Write-Skip "Telemetry scheduled tasks already disabled"
@@ -720,608 +868,35 @@ function Disable-Telemetry {
         Write-Critical "Telemetry disabling failed: $_"
     }
 }
-#endregion
 
-#region Disable Cortana
-function Disable-Cortana {
-    Write-Status "Disabling Cortana..."
-    
-    try {
-        # Cortana registry settings
-        $cortanaPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search"
-        if (!(Test-Path $cortanaPath)) {
-            if (!$DryRun) {
-                New-Item -Path $cortanaPath -Force | Out-Null
-            } else {
-                Write-WouldPerform "Create registry path $cortanaPath"
-            }
-        }
-        
-        # Disable Cortana
-        $allowCortana = Get-ItemProperty -Path $cortanaPath -Name "AllowCortana" -ErrorAction SilentlyContinue
-        if (!$allowCortana -or $allowCortana.AllowCortana -ne 0) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path $cortanaPath -Name "AllowCortana" -Value 0 -Type DWord -Force
-                Write-Success "Disabled Cortana"
-            } else {
-                Write-WouldPerform "Disable Cortana"
-            }
-        } else {
-            Write-Skip "Cortana already disabled"
-        }
-        
-        # Disable Cortana in search
-        $cortanaConsent = Get-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "CortanaConsent" -ErrorAction SilentlyContinue
-        if (!$cortanaConsent -or $cortanaConsent.CortanaConsent -ne 0) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "CortanaConsent" -Value 0 -Type DWord -Force
-                Write-Success "Disabled Cortana in search"
-            } else {
-                Write-WouldPerform "Disable Cortana in search"
-            }
-        } else {
-            Write-Skip "Cortana in search already disabled"
-        }
-        
-        # Disable web search
-        $webSearch = Get-ItemProperty -Path $cortanaPath -Name "DisableWebSearch" -ErrorAction SilentlyContinue
-        if (!$webSearch -or $webSearch.DisableWebSearch -ne 1) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path $cortanaPath -Name "DisableWebSearch" -Value 1 -Type DWord -Force
-                Write-Success "Disabled web search"
-            } else {
-                Write-WouldPerform "Disable web search"
-            }
-        } else {
-            Write-Skip "Web search already disabled"
-        }
-        
-        # Disable Bing in Windows Search
-        $bingSearch = Get-ItemProperty -Path $cortanaPath -Name "BingSearchEnabled" -ErrorAction SilentlyContinue
-        if (!$bingSearch -or $bingSearch.BingSearchEnabled -ne 0) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path $cortanaPath -Name "BingSearchEnabled" -Value 0 -Type DWord -Force
-                Write-Success "Disabled Bing in Windows Search"
-            } else {
-                Write-WouldPerform "Disable Bing in Windows Search"
-            }
-        } else {
-            Write-Skip "Bing in Windows Search already disabled"
-        }
-        
-        Write-Info "Cortana may reactivate after major Windows updates"
-    } catch {
-        Write-Critical "Cortana disabling failed: $_"
-    }
-}
-#endregion
-
-#region Remove OneDrive
-function Remove-OneDrive {
-    Write-Status "Removing OneDrive..."
-    
-    try {
-        # Stop OneDrive process
-        if (!$DryRun) {
-            Get-Process -Name "OneDrive" -ErrorAction SilentlyContinue | Stop-Process -Force
-        } else {
-            Write-WouldPerform "Stop OneDrive process"
-        }
-        
-        # Uninstall OneDrive
-        $oneDriveUninstall = "$env:SystemRoot\SysWOW64\OneDriveSetup.exe"
-        if (!(Test-Path $oneDriveUninstall)) {
-            $oneDriveUninstall = "$env:SystemRoot\System32\OneDriveSetup.exe"
-        }
-        
-        if (Test-Path $oneDriveUninstall) {
-            if (!$DryRun) {
-                Start-Process $oneDriveUninstall -ArgumentList "/uninstall" -Wait
-                Write-Success "Uninstalled OneDrive"
-            } else {
-                Write-WouldPerform "Uninstall OneDrive"
-            }
-        } else {
-            Write-Skip "OneDrive uninstaller not found"
-        }
-        
-        # Remove OneDrive from Explorer
-        $explorerPath = "HKCR:\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}"
-        if (Test-Path $explorerPath) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path $explorerPath -Name "System.IsPinnedToNameSpaceTree" -Value 0 -Type DWord -Force
-                Write-Success "Removed OneDrive from Explorer"
-            } else {
-                Write-WouldPerform "Remove OneDrive from Explorer"
-            }
-        } else {
-            Write-Skip "OneDrive Explorer entry not found"
-        }
-        
-        # Remove 64-bit OneDrive from Explorer
-        $explorer64Path = "HKCR:\Wow6432Node\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}"
-        if (Test-Path $explorer64Path) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path $explorer64Path -Name "System.IsPinnedToNameSpaceTree" -Value 0 -Type DWord -Force
-                Write-Success "Removed 64-bit OneDrive from Explorer"
-            } else {
-                Write-WouldPerform "Remove 64-bit OneDrive from Explorer"
-            }
-        } else {
-            Write-Skip "OneDrive 64-bit Explorer entry not found"
-        }
-        
-        # Prevent OneDrive reinstallation
-        $preventPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\OneDrive"
-        if (!(Test-Path $preventPath)) {
-            if (!$DryRun) {
-                New-Item -Path $preventPath -Force | Out-Null
-            } else {
-                Write-WouldPerform "Create registry path $preventPath"
-            }
-        }
-        
-        $disableFileSyncNGSC = Get-ItemProperty -Path $preventPath -Name "DisableFileSyncNGSC" -ErrorAction SilentlyContinue
-        if (!$disableFileSyncNGSC -or $disableFileSyncNGSC.DisableFileSyncNGSC -ne 1) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path $preventPath -Name "DisableFileSyncNGSC" -Value 1 -Type DWord -Force
-                Write-Success "Prevented OneDrive reinstallation"
-            } else {
-                Write-WouldPerform "Prevent OneDrive reinstallation"
-            }
-        } else {
-            Write-Skip "OneDrive reinstallation already prevented"
-        }
-        
-        Write-Info "OneDrive may attempt to reinstall during Windows updates"
-    } catch {
-        Write-Critical "OneDrive removal failed: $_"
-    }
-}
-#endregion
-
-#region Disable Web Search in Taskbar
-function Disable-WebSearch {
-    Write-Status "Disabling web search in taskbar..."
-    
-    try {
-        # Disable web search in start menu
-        $searchPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search"
-        if (!(Test-Path $searchPath)) {
-            if (!$DryRun) {
-                New-Item -Path $searchPath -Force | Out-Null
-            } else {
-                Write-WouldPerform "Create registry path $searchPath"
-            }
-        }
-        
-        $searchboxTaskbar = Get-ItemProperty -Path $searchPath -Name "SearchboxTaskbarMode" -ErrorAction SilentlyContinue
-        if (!$searchboxTaskbar -or $searchboxTaskbar.SearchboxTaskbarMode -ne 1) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path $searchPath -Name "SearchboxTaskbarMode" -Value 1 -Type DWord -Force
-                Write-Success "Set search box to icon-only mode"
-            } else {
-                Write-WouldPerform "Set search box to icon-only mode"
-            }
-        } else {
-            Write-Skip "Search box already in icon-only mode"
-        }
-        
-        $deviceHistorySearch = Get-ItemProperty -Path $searchPath -Name "DeviceHistoryEnabled" -ErrorAction SilentlyContinue
-        if (!$deviceHistorySearch -or $deviceHistorySearch.DeviceHistoryEnabled -ne 0) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path $searchPath -Name "DeviceHistoryEnabled" -Value 0 -Type DWord -Force
-                Write-Success "Disabled device history search"
-            } else {
-                Write-WouldPerform "Disable device history search"
-            }
-        } else {
-            Write-Skip "Device history search already disabled"
-        }
-        
-        $disableSearch = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search" -Name "DisableSearch" -ErrorAction SilentlyContinue
-        if (!$disableSearch -or $disableSearch.DisableSearch -ne 1) {
-            if (!(Test-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search")) {
-                if (!$DryRun) {
-                    New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search" -Force | Out-Null
-                } else {
-                    Write-WouldPerform "Create registry path HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search"
-                }
-            }
-            
-            if (!$DryRun) {
-                Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search" -Name "DisableSearch" -Value 1 -Type DWord -Force
-                Write-Success "Disabled web search"
-            } else {
-                Write-WouldPerform "Disable web search"
-            }
-        } else {
-            Write-Skip "Web search already disabled"
-        }
-    } catch {
-        Write-Critical "Web search disabling failed: $_"
-    }
-}
-#endregion
-
-#region Contain Edge
-function Contain-Edge {
-    Write-Status "Containing Microsoft Edge..."
-    
-    try {
-        # Disable Edge first run experience
-        $edgePath = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"
-        if (!(Test-Path $edgePath)) {
-            if (!$DryRun) {
-                New-Item -Path $edgePath -Force | Out-Null
-            } else {
-                Write-WouldPerform "Create registry path $edgePath"
-            }
-        }
-        
-        $firstRun = Get-ItemProperty -Path $edgePath -Name "HideFirstRunExperience" -ErrorAction SilentlyContinue
-        if (!$firstRun -or $firstRun.HideFirstRunExperience -ne 1) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path $edgePath -Name "HideFirstRunExperience" -Value 1 -Type DWord -Force
-                Write-Success "Disabled Edge first run experience"
-            } else {
-                Write-WouldPerform "Disable Edge first run experience"
-            }
-        } else {
-            Write-Skip "Edge first run experience already disabled"
-        }
-        
-        # Disable Edge desktop shortcut creation
-        $shortcutPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer"
-        $disableEdgeShortcut = Get-ItemProperty -Path $shortcutPath -Name "DisableEdgeDesktopShortcutCreation" -ErrorAction SilentlyContinue
-        if (!$disableEdgeShortcut -or $disableEdgeShortcut.DisableEdgeDesktopShortcutCreation -ne 1) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path $shortcutPath -Name "DisableEdgeDesktopShortcutCreation" -Value 1 -Type DWord -Force
-                Write-Success "Disabled Edge desktop shortcut creation"
-            } else {
-                Write-WouldPerform "Disable Edge desktop shortcut creation"
-            }
-        } else {
-            Write-Skip "Edge desktop shortcut creation already disabled"
-        }
-        
-        # Remove Edge shortcuts
-        $edgeShortcuts = @(
-            "$env:USERPROFILE\Desktop\Microsoft Edge.lnk",
-            "$env:PUBLIC\Desktop\Microsoft Edge.lnk"
-        )
-        
-        $shortcutsRemoved = $false
-        foreach ($shortcut in $edgeShortcuts) {
-            if (Test-Path $shortcut) {
-                if (!$DryRun) {
-                    Remove-Item $shortcut -Force
-                    $shortcutsRemoved = $true
-                } else {
-                    Write-WouldPerform "Remove Edge shortcut: $shortcut"
-                    $shortcutsRemoved = $true
-                }
-            }
-        }
-        
-        if ($shortcutsRemoved -and !$DryRun) {
-            Write-Success "Removed Edge shortcuts"
-        } elseif (!$shortcutsRemoved) {
-            Write-Skip "No Edge shortcuts found to remove"
-        }
-        
-        # Disable automatic browser choice
-        $browserChoice = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer"
-        if (!(Test-Path $browserChoice)) {
-            if (!$DryRun) {
-                New-Item -Path $browserChoice -Force | Out-Null
-            } else {
-                Write-WouldPerform "Create registry path $browserChoice"
-            }
-        }
-        
-        $noBrowserChoice = Get-ItemProperty -Path $browserChoice -Name "NoNewAppAlert" -ErrorAction SilentlyContinue
-        if (!$noBrowserChoice -or $noBrowserChoice.NoNewAppAlert -ne 1) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path $browserChoice -Name "NoNewAppAlert" -Value 1 -Type DWord -Force
-                Write-Success "Disabled automatic browser choice dialogs"
-            } else {
-                Write-WouldPerform "Disable automatic browser choice dialogs"
-            }
-        } else {
-            Write-Skip "Automatic browser choice dialogs already disabled"
-        }
-        
-        Write-Warning "Edge cannot be completely removed without risking system instability"
-        Write-Info "Some Edge components remain active for core Windows functionality"
-    } catch {
-        Write-Critical "Edge containment failed: $_"
-    }
-}Null
-            } else {
-                Write-WouldPerform "Create registry path $edgePath"
-            }
-        }
-        
-        $firstRun = Get-ItemProperty -Path $edgePath -Name "HideFirstRunExperience" -ErrorAction SilentlyContinue
-        if (!$firstRun -or $firstRun.HideFirstRunExperience -ne 1) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path $edgePath -Name "HideFirstRunExperience" -Value 1 -Type DWord -Force
-                Write-Success "Disabled Edge first run experience"
-            } else {
-                Write-WouldPerform "Disable Edge first run experience"
-            }
-        } else {
-            Write-Skip "Edge first run experience already disabled"
-        }
-        
-        # Disable Edge desktop shortcut creation
-        $shortcutPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer"
-        $disableEdgeShortcut = Get-ItemProperty -Path $shortcutPath -Name "DisableEdgeDesktopShortcutCreation" -ErrorAction SilentlyContinue
-        if (!$disableEdgeShortcut -or $disableEdgeShortcut.DisableEdgeDesktopShortcutCreation -ne 1) {
-            if (!$DryRun) {
-                Set-ItemProperty -Path $shortcutPath -Name "DisableEdgeDesktopShortcutCreation" -Value 1 -Type DWord -Force
-                Write-Success "Disabled Edge desktop shortcut creation"
-            } else {
-                Write-WouldPerform "Disable Edge desktop shortcut creation"
-            }
-        } else {
-            Write-Skip "Edge desktop shortcut creation already disabled"
-        }
-        
-        # Remove Edge shortcuts
-        $edgeShortcuts = @(
-            "$env:USERPROFILE\Desktop\Microsoft Edge.lnk",
-            "$env:PUBLIC\Desktop\Microsoft Edge.lnk"
-        )
-        
-        $shortcutsRemoved = $false
-        foreach ($shortcut in $edgeShortcuts) {
-            if (Test-Path $shortcut) {
-                if (!$DryRun) {
-                    Remove-Item $shortcut -Force
-                    $shortcutsRemoved = $true
-                } else {
-                    Write-WouldPerform "Remove Edge shortcut: $shortcut"
-                    $shortcutsRemoved = $true
-                }
-            }
-        }
-        
-        if ($shortcutsRemoved -and !$DryRun) {
-            Write-Success "Removed Edge shortcuts"
-        } elseif (!$shortcutsRemoved) {
-            Write-Skip "No Edge shortcuts found to remove"
-        }
-        
-        # Disable automatic browser choice
-        $browserChoice = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer"
-        if (!(Test-Path $browserChoice)) {
-            if (!$DryRun) {
-                New-Item -Path $browserChoice -Force | Out-
-#endregion
-
-#region Set Browser as Default
-function Set-BrowserDefault {
-    param (
-        [Parameter(Mandatory=$false)]
-        [string]$Browser = ""
-    )
-    
-    # Check current default browser
-    $currentDefault = Get-DefaultBrowser
-    
-    # Determine which browser to set as default
-    if ($Browser -eq "Chrome") {
-        if (!(Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe" -Or Test-Path "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe")) {
-            Write-Warning "Chrome not installed - cannot set as default browser"
-            return
-        }
-        if ($currentDefault -eq "Chrome") {
-            Write-Skip "Chrome is already set as default browser"
-        } else {
-            Set-ChromeDefault
-        }
-    } 
-    elseif ($Browser -eq "Firefox") {
-        if (!(Test-Path "C:\Program Files\Mozilla Firefox\firefox.exe")) {
-            Write-Warning "Firefox not installed - cannot set as default browser"
-            return
-        }
-        if ($currentDefault -eq "Firefox") {
-            Write-Skip "Firefox is already set as default browser"
-        } else {
-            Set-FirefoxDefault
-        }
-    }
-    else {
-        # Auto-detect installed browser
-        if (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe" -Or Test-Path "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") {
-            if ($currentDefault -eq "Chrome") {
-                Write-Skip "Chrome is already set as default browser"
-            } else {
-                Set-ChromeDefault
-            }
-        }
-        elseif (Test-Path "C:\Program Files\Mozilla Firefox\firefox.exe") {
-            if ($currentDefault -eq "Firefox") {
-                Write-Skip "Firefox is already set as default browser"
-            } else {
-                Set-FirefoxDefault
-            }
-        }
-        else {
-            Write-Warning "No supported browser installed - cannot set default browser"
-        }
-    }
-}
-
-function Set-ChromeDefault {
-    Write-Status "Setting Chrome as default browser..."
-    
-    try {
-        # Prepare Chrome registry entries
-        $progId = "ChromeHTML"
-        
-        # Set default protocol handlers for HTTP/HTTPS
-        $protoPath = "HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations"
-        $protocols = @("http", "https")
-        
-        foreach ($protocol in $protocols) {
-            $protocolPath = "$protoPath\$protocol\UserChoice"
-            
-            # We can try but Windows often reverts these
-            if (!(Test-Path $protocolPath)) {
-                New-Item -Path $protocolPath -Force | Out-Null
-            }
-            
-            try {
-                Set-ItemProperty -Path $protocolPath -Name "ProgId" -Value $progId -Type String -Force
-                Write-Success "Set Chrome as default for $protocol (may require user confirmation)"
-            } catch {
-                # Windows 10 actively prevents programmatic changes here
-                Write-Warning "Could not set Chrome as default for $protocol protocol"
-            }
-        }
-        
-        # Set default file associations
-        $fileTypes = @(".htm", ".html")
-        foreach ($type in $fileTypes) {
-            try {
-                cmd /c "assoc $type=ChromeHTML" | Out-Null
-                Write-Success "Set Chrome as default for $type files"
-            } catch {
-                Write-Warning "Could not set Chrome as default for $type files"
-            }
-        }
-        
-        # Get correct Chrome path
-        $chromePath = ""
-        if (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe") {
-            $chromePath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-        } else {
-            $chromePath = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-        }
-        
-        # Launch Chrome to help user set it as default
-        Write-Info "Opening Chrome to help you set it as your default browser"
-        Start-Process $chromePath -ArgumentList "--new-window chrome://settings/defaultBrowser"
-        
-        # Clear instructions for user
-        Write-Warning "Windows 10 restricts programmatic browser default changes"
-        Write-Info "To set Chrome as default: Settings > Apps > Default Apps > Web Browser > Chrome"
-        Write-Info "Or follow the prompt in Chrome to make it your default browser"
-    } catch {
-        Write-Warning "Setting Chrome as default browser failed: $_"
-    }
-}
-
-function Set-FirefoxDefault {
-    Write-Status "Setting Firefox as default browser..."
-    
-    try {
-        # Prepare Firefox registry entries
-        $progId = "FirefoxHTML"
-        
-        # Set default protocol handlers for HTTP/HTTPS
-        $protoPath = "HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations"
-        $protocols = @("http", "https")
-        
-        foreach ($protocol in $protocols) {
-            $protocolPath = "$protoPath\$protocol\UserChoice"
-            
-            # We can try but Windows often reverts these
-            if (!(Test-Path $protocolPath)) {
-                New-Item -Path $protocolPath -Force | Out-Null
-            }
-            
-            try {
-                Set-ItemProperty -Path $protocolPath -Name "ProgId" -Value $progId -Type String -Force
-                Write-Success "Set Firefox as default for $protocol (may require user confirmation)"
-            } catch {
-                # Windows 10 actively prevents programmatic changes here
-                Write-Warning "Could not set Firefox as default for $protocol protocol"
-            }
-        }
-        
-        # Set default file associations
-        $fileTypes = @(".htm", ".html")
-        foreach ($type in $fileTypes) {
-            try {
-                cmd /c "assoc $type=FirefoxHTML" | Out-Null
-                Write-Success "Set Firefox as default for $type files"
-            } catch {
-                Write-Warning "Could not set Firefox as default for $type files"
-            }
-        }
-        
-        # Launch Firefox to help user set it as default
-        Write-Info "Opening Firefox to help you set it as your default browser"
-        Start-Process "C:\Program Files\Mozilla Firefox\firefox.exe" -ArgumentList "-new-tab about:preferences#general"
-        
-        # Clear instructions for user
-        Write-Warning "Windows 10 restricts programmatic browser default changes"
-        Write-Info "To set Firefox as default: Settings > Apps > Default Apps > Web Browser > Firefox"
-        Write-Info "Or follow the prompt in Firefox to make it your default browser"
-    } catch {
-        Write-Warning "Setting Firefox as default browser failed: $_"
-    }
-}
-#endregion
-
-#region Main Execution
-function Main {
-    Write-Host "===== Windows 10 Debloat Script =====" -ForegroundColor Green
-    
-    if ($DryRun) {
-        Write-Host "RUNNING IN DRY-RUN MODE - No changes will be made" -ForegroundColor Magenta
-        Write-Host "Use -Apply parameter to apply changes" -ForegroundColor Magenta
-    } else {
-        Write-Host "CHANGES WILL BE APPLIED" -ForegroundColor Green
-    }
-    
-    # Check admin rights
-    if (!(Verify-AdminRights)) {
-        Process-Messages
-        exit 1
-    }
-    
-    # Determine which functions to run
-    $runAll = $All -or (!$Telemetry -and !$Cortana -and !$OneDrive -and !$WebSearch -and !$Edge -and !$Firefox -and !$Chrome)
-    
-    if ($runAll) {
-        Write-Host "Running all operations..." -ForegroundColor Green
-        Disable-Telemetry
-        Disable-Cortana
-        Remove-OneDrive
-        Disable-WebSearch
-        Contain-Edge
-        
-        # Default behavior - auto-detect with preferences
-        $browserResult = Install-Browser
-        if ($browserResult.Success -and $browserResult.Action -ne "None") {
-            Set-BrowserDefault -Browser $browserResult.Browser
-        }
-    } else {
-        if ($Telemetry) { Disable-Telemetry }
-        if ($Cortana) { Disable-Cortana }
-        if ($OneDrive) { Remove-OneDrive }
-        if ($WebSearch) { Disable-WebSearch }
-        if ($Edge) { Contain-Edge }
-        if ($Firefox) { 
-            $browserResult = Install-Browser -BrowserChoice "Firefox"
-            if ($browserResult.Success) { Set-BrowserDefault -Browser "Firefox" }
-        }
-        if ($Chrome) {
-            $browserResult = Install-Browser -BrowserChoice "Chrome"
-            if ($browserResult.Success) { Set-BrowserDefault -Browser "Chrome" }
-        }
-    }
-    
-    # Process errors, warnings, info and show summary
+# Verify admin rights before proceeding
+if (!(Verify-AdminRights)) {
     Process-Messages
-    Process-Summary
+    exit 1
 }
 
-# Run the main function
-Main
+# Run selected operations or all if none specified
+Write-Host "Windows 10 Debloat Script" -ForegroundColor Cyan
+Write-Host "------------------------" -ForegroundColor Cyan
+
+if ($global:DryRun) {
+    Write-Host "DRY RUN MODE - No changes will be made" -ForegroundColor Yellow
+}
+
+# Determine which operations to run
+$runAll = $All -or (!$Telemetry -and !$Cortana -and !$OneDrive -and !$WebSearch -and !$Edge -and !$Firefox -and !$Chrome)
+
+# Run operations based on parameters
+if ($Telemetry -or $runAll) { Disable-Telemetry }
+if ($Firefox) { 
+    $result = Install-Browser -BrowserChoice "Firefox"
+    if ($result.Success) { Set-BrowserDefault -Browser "Firefox" }
+}
+if ($Chrome) { 
+    $result = Install-Browser -BrowserChoice "Chrome" 
+    if ($result.Success) { Set-BrowserDefault -Browser "Chrome" }
+}
+
+# Display summary
+Process-Messages
+Process-Summary
