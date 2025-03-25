@@ -25,18 +25,19 @@ A PowerShell script to disable unwanted Windows 10 features and services. Design
 
 ### Basic Usage
 
-Run the script with administrator privileges in dry-run mode (default):
+Run the script with administrator privileges:
 
 ```powershell
-.\windows-debloat.ps1
+# Run with execution policy bypass
+powershell -ExecutionPolicy Bypass -File "path\to\win10debloat.ps1"
 ```
 
-This shows all operations that would be performed without making actual changes.
+This runs in dry-run mode by default, showing all operations that would be performed without making actual changes.
 
 To apply changes:
 
 ```powershell
-.\windows-debloat.ps1 -Apply
+powershell -ExecutionPolicy Bypass -File "path\to\win10debloat.ps1" -Apply
 ```
 
 ### Targeted Operations
@@ -44,8 +45,11 @@ To apply changes:
 Select specific operations with parameters:
 
 ```powershell
-.\windows-debloat.ps1 -Telemetry -Edge
-.\windows-debloat.ps1 -Telemetry -Edge -Apply  # To actually apply changes
+# Dry run for specific features
+powershell -ExecutionPolicy Bypass -File "path\to\win10debloat.ps1" -Telemetry -Edge
+
+# Apply changes for specific features
+powershell -ExecutionPolicy Bypass -File "path\to\win10debloat.ps1" -Telemetry -Edge -Apply
 ```
 
 Available parameters:
@@ -57,22 +61,8 @@ Available parameters:
 - `-Firefox`: Install/use Firefox and set as default
 - `-Chrome`: Install/use Chrome and set as default
 - `-All`: Run all operations (default if no parameters specified)
-- `-Apply`: Actually apply changes (without this, runs in dry-run mode)
-
-### Disable Dry-Run Mode
-
-By default, the script runs in dry-run mode unless the `-Apply` parameter is used. If you want to always apply changes without requiring the `-Apply` parameter, you can modify the script:
-
-Change the following line near the top of the script:
-```powershell
-$ALWAYS_APPLY = $false # set to true to use at your own risk
-```
-to:
-```powershell
-$ALWAYS_APPLY = $true # set to true to use at your own risk
-```
-
-**Warning**: This bypasses the safety of dry-run mode and will always apply changes.
+- `-DryRun`: Preview changes without applying them (default behavior)
+- `-Apply`: Actually apply changes (overrides -DryRun)
 
 ### Browser Handling
 
@@ -110,5 +100,3 @@ Under the following terms:
 - Attribution — You must give appropriate credit
 - NonCommercial — You may not use the material for commercial purposes
 - ShareAlike — If you remix, transform, or build upon the material, you must distribute your contributions under the same license as the original
-
-No additional restrictions — You may not apply legal terms or technological measures that legally restrict others from doing anything the license permits.
