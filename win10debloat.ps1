@@ -875,6 +875,200 @@ if (!(Verify-AdminRights)) {
     exit 1
 }
 
+Function Disable-WebSearch {
+    Write-Status "Disabling Bing Search in Windows Start Menu..."
+    
+    # For Windows 10 version 2004 and newer
+    $explorerKeyPath = "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Explorer"
+    $explorerExists = Test-Path $explorerKeyPath
+    $disableSearchBoxValue = $null
+    
+    if ($explorerExists) {
+        $disableSearchBoxValue = Get-ItemProperty -Path $explorerKeyPath -Name "DisableSearchBoxSuggestions" -ErrorAction SilentlyContinue
+    }
+    
+    # For Windows 10 version 1809 to 2004
+    $searchKeyPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search"
+    $searchExists = Test-Path $searchKeyPath
+    $bingSearchValue = $null
+    
+    if ($searchExists) {
+        $bingSearchValue = Get-ItemProperty -Path $searchKeyPath -Name "BingSearchEnabled" -ErrorAction SilentlyContinue
+    }
+    
+    # Check if changes are needed
+    $needsModernFix = (!$explorerExists) -or ($null -eq $disableSearchBoxValue) -or ($disableSearchBoxValue.DisableSearchBoxSuggestions -ne 1)
+    $needsLegacyFix = (!$searchExists) -or ($null -eq $bingSearchValue) -or ($bingSearchValue.BingSearchEnabled -ne 0)
+    
+    if (-not $needsModernFix -and -not $needsLegacyFix) {
+        Write-Skip "Start Menu Bing Search already disabled"
+        return
+    }
+    
+    if ($global:DryRun) {
+        if ($needsModernFix) {
+            Write-WouldPerform "Create/update registry key: $explorerKeyPath\DisableSearchBoxSuggestions = 1"
+        }
+        if ($needsLegacyFix) {
+            Write-WouldPerform "Create/update registry key: $searchKeyPath\BingSearchEnabled = 0"
+        }
+        Write-WouldPerform "Restart explorer.exe to apply Start Menu Bing Search changes"
+    } else {
+        # Apply the changes
+        if ($needsModernFix) {
+            if (-not $explorerExists) {
+                New-Item -Path $explorerKeyPath -Force | Out-Null
+                Write-Success "Created registry path: $explorerKeyPath"
+            }
+            Set-ItemProperty -Path $explorerKeyPath -Name "DisableSearchBoxSuggestions" -Value 1 -Type DWord
+            Write-Success "Disabled modern web search in Start Menu (DisableSearchBoxSuggestions = 1)"
+        }
+        
+        if ($needsLegacyFix) {
+            if (-not $searchExists) {
+                New-Item -Path $searchKeyPath -Force | Out-Null
+                Write-Success "Created registry path: $searchKeyPath"
+            }
+            Set-ItemProperty -Path $searchKeyPath -Name "BingSearchEnabled" -Value 0 -Type DWord
+            Write-Success "Disabled legacy web search in Start Menu (BingSearchEnabled = 0)"
+        }
+        
+        # Add restart note
+        Write-Info "Changes will take effect after restarting Explorer or rebooting"
+        
+        # Attempt to restart Explorer
+        try {
+            Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+            Start-Process explorer
+            Write-Success "Restarted Explorer to apply Start Menu Bing Search changes"
+        } catch {
+            Write-Warning "Unable to restart Explorer automatically. You may need to reboot"
+        }
+    }
+}
+
+Function Disable-Cortana {
+    Write-Status "Disabling Cortana..."
+    
+    $searchKeyPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search"
+    $cortanaKeyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search"
+    
+    # Check if already disabled
+    $cortanaDisabled = $false
+    if (Test-Path $searchKeyPath) {
+        $cortanaEnabledProp = Get-ItemProperty -Path $searchKeyPath -Name "CortanaEnabled" -ErrorAction SilentlyContinue
+        $allowCortanaProp = Get-ItemProperty -Path $searchKeyPath -Name "AllowCortana" -ErrorAction SilentlyContinue
+        
+        if (($null -ne $cortanaEnabledProp -and $cortanaEnabledProp.CortanaEnabled -eq 0) -and
+            ($null -ne $allowCortanaProp -and $allowCortanaProp.AllowCortana -eq 0)) {
+            $cortanaDisabled = $true
+        }
+    }
+    
+    if ($cortanaDisabled) {
+        Write-Skip "Cortana already disabled"
+        return
+    }
+    
+    if ($global:DryRun) {
+        Write-WouldPerform "Disable Cortana in registry"
+    } else {
+        # Ensure paths exist
+        if (-not (Test-Path $searchKeyPath)) {
+            New-Item -Path $searchKeyPath -Force | Out-Null
+        }
+        if (-not (Test-Path $cortanaKeyPath)) {
+            New-Item -Path $cortanaKeyPath -Force | Out-Null
+        }
+        
+        # Disable Cortana
+        Set-ItemProperty -Path $searchKeyPath -Name "CortanaEnabled" -Value 0 -Type DWord
+        Set-ItemProperty -Path $searchKeyPath -Name "AllowCortana" -Value 0 -Type DWord
+        Set-ItemProperty -Path $cortanaKeyPath -Name "AllowCortana" -Value 0 -Type DWord
+        
+        Write-Success "Disabled Cortana"
+    }
+}
+
+Function Disable-OneDrive {
+    Write-Status "Disabling and removing OneDrive..."
+    
+    $onedriveKeyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\OneDrive"
+    $explorerKeyPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+    
+    # Check if process is running
+    $processExists = Get-Process -Name "OneDrive" -ErrorAction SilentlyContinue
+    
+    if ($global:DryRun) {
+        if ($processExists) {
+            Write-WouldPerform "Terminate OneDrive process"
+        }
+        Write-WouldPerform "Disable OneDrive in registry"
+        Write-WouldPerform "Hide OneDrive from Explorer"
+    } else {
+        # Kill process if running
+        if ($processExists) {
+            Stop-Process -Name "OneDrive" -Force -ErrorAction SilentlyContinue
+            Write-Success "Terminated OneDrive process"
+        }
+        
+        # Ensure registry paths exist
+        if (-not (Test-Path $onedriveKeyPath)) {
+            New-Item -Path $onedriveKeyPath -Force | Out-Null
+        }
+        
+        # Disable OneDrive
+        Set-ItemProperty -Path $onedriveKeyPath -Name "DisableFileSyncNGSC" -Value 1 -Type DWord
+        Set-ItemProperty -Path $onedriveKeyPath -Name "DisableFileSync" -Value 1 -Type DWord
+        
+        # Hide from Explorer
+        if (Test-Path $explorerKeyPath) {
+            Set-ItemProperty -Path $explorerKeyPath -Name "ShowSyncProviderNotifications" -Value 0 -Type DWord
+        }
+        
+        Write-Success "Disabled OneDrive synchronization"
+        Write-Info "OneDrive app may need to be uninstalled manually"
+    }
+}
+
+Function Disable-Edge {
+    Write-Status "Disabling Microsoft Edge integrations..."
+    
+    $edgeKeyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"
+    $msKeyPath = "HKLM:\SOFTWARE\Policies\Microsoft"
+    
+    if ($global:DryRun) {
+        Write-WouldPerform "Disable Edge default browser check"
+        Write-WouldPerform "Disable Edge first-run experience"
+        Write-WouldPerform "Disable Edge as PDF handler"
+    } else {
+        # Ensure paths exist
+        if (-not (Test-Path $msKeyPath)) {
+            New-Item -Path $msKeyPath -Force | Out-Null
+        }
+        if (-not (Test-Path $edgeKeyPath)) {
+            New-Item -Path $edgeKeyPath -Force | Out-Null
+        }
+        
+        # Disable Edge features
+        Set-ItemProperty -Path $edgeKeyPath -Name "DefaultBrowserSettingEnabled" -Value 0 -Type DWord
+        Set-ItemProperty -Path $edgeKeyPath -Name "HideFirstRunExperience" -Value 1 -Type DWord
+        
+        # Prevent Edge from being default PDF handler
+        $pdfKeyPath = "HKCR:\.pdf"
+        if (Test-Path $pdfKeyPath) {
+            $currentDefault = (Get-ItemProperty -Path $pdfKeyPath)."(Default)"
+            if ($currentDefault -match "Edge") {
+                Set-ItemProperty -Path $pdfKeyPath -Name "(Default)" -Value "AcroExch.Document.DC"
+                Write-Success "Removed Edge as default PDF handler"
+            }
+        }
+        
+        Write-Success "Disabled Edge integrations"
+        Write-Info "Edge cannot be fully removed but its integrations have been disabled"
+    }
+}
+
 # Run selected operations or all if none specified
 Write-Host "Windows 10 Debloat Script" -ForegroundColor Cyan
 Write-Host "------------------------" -ForegroundColor Cyan
@@ -888,6 +1082,10 @@ $runAll = $All -or (!$Telemetry -and !$Cortana -and !$OneDrive -and !$WebSearch 
 
 # Run operations based on parameters
 if ($Telemetry -or $runAll) { Disable-Telemetry }
+if ($WebSearch -or $runAll) { Disable-WebSearch }
+if ($Cortana -or $runAll) { Disable-Cortana }
+if ($OneDrive -or $runAll) { Disable-OneDrive }
+if ($Edge -or $runAll) { Disable-Edge }
 if ($Firefox) { 
     $result = Install-Browser -BrowserChoice "Firefox"
     if ($result.Success) { Set-BrowserDefault -Browser "Firefox" }
